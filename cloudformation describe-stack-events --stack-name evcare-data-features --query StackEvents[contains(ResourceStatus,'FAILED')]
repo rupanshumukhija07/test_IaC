@@ -1,0 +1,38 @@
+[
+    {
+        "StackId": "arn:aws:cloudformation:ca-central-1:543179585367:stack/evcare-data-features/47461f20-c670-11f0-a4d8-0e9415ce67f9",
+        "EventId": "I18nKeyTable-CREATE_FAILED-2025-11-21T00:23:32.983Z",
+        "StackName": "evcare-data-features",
+        "LogicalResourceId": "I18nKeyTable",
+        "PhysicalResourceId": "evcare-data-features-I18nKeyTable-12XS5AYRSS100",
+        "ResourceType": "AWS::DynamoDB::Table",
+        "Timestamp": "2025-11-21T00:23:32.983000+00:00",
+        "ResourceStatus": "CREATE_FAILED",
+        "ResourceStatusReason": "Resource creation cancelled",
+        "ResourceProperties": "{\"AttributeDefinitions\":[{\"AttributeType\":\"S\",\"AttributeName\":\"KeyId\"}],\"BillingMode\":\"PAY_PER_REQUEST\",\"KeySchema\":[{\"KeyType\":\"HASH\",\"AttributeName\":\"KeyId\"}],\"Tags\":[{\"Value\":\"features\",\"Key\":\"Environment\"},{\"Value\":\"vpc-001db79aea9ecb9ce\",\"Key\":\"VpcId\"}]}"
+    },
+    {
+        "StackId": "arn:aws:cloudformation:ca-central-1:543179585367:stack/evcare-data-features/47461f20-c670-11f0-a4d8-0e9415ce67f9",
+        "EventId": "OrgCacheTable-CREATE_FAILED-2025-11-21T00:23:32.982Z",
+        "StackName": "evcare-data-features",
+        "LogicalResourceId": "OrgCacheTable",
+        "PhysicalResourceId": "evcare-data-features-OrgCacheTable-U6D3UFD65TWZ",
+        "ResourceType": "AWS::DynamoDB::Table",
+        "Timestamp": "2025-11-21T00:23:32.982000+00:00",
+        "ResourceStatus": "CREATE_FAILED",
+        "ResourceStatusReason": "Resource creation cancelled",
+        "ResourceProperties": "{\"AttributeDefinitions\":[{\"AttributeType\":\"S\",\"AttributeName\":\"OrgId\"}],\"BillingMode\":\"PAY_PER_REQUEST\",\"KeySchema\":[{\"KeyType\":\"HASH\",\"AttributeName\":\"OrgId\"}],\"Tags\":[{\"Value\":\"features\",\"Key\":\"Environment\"},{\"Value\":\"vpc-001db79aea9ecb9ce\",\"Key\":\"VpcId\"}]}"
+    },
+    {
+        "StackId": "arn:aws:cloudformation:ca-central-1:543179585367:stack/evcare-data-features/47461f20-c670-11f0-a4d8-0e9415ce67f9",
+        "EventId": "AuroraCluster-CREATE_FAILED-2025-11-21T00:23:32.693Z",
+        "StackName": "evcare-data-features",
+        "LogicalResourceId": "AuroraCluster",
+        "PhysicalResourceId": "evcare-data-features-auroracluster-hxk7oisewi5b",
+        "ResourceType": "AWS::RDS::DBCluster",
+        "Timestamp": "2025-11-21T00:23:32.693000+00:00",
+        "ResourceStatus": "CREATE_FAILED",
+        "ResourceStatusReason": "Resource handler returned message: \"The engine mode serverless you requested is currently unavailable. (Service: Rds, Status Code: 400, Request ID: 84798f1d-15ad-4ae2-b86a-e5bd09a4dc3e) (SDK Attempt Count: 1)\" (RequestToken: 48f528fa-8bd6-6fc5-d3de-34add0c20a27, HandlerErrorCode: InvalidRequest)",
+        "ResourceProperties": "{\"MasterUserPassword\":\"{{resolve:secretsmanager:arn:aws:secretsmanager:ca-central-1:543179585367:secret:evcare/features/rds/secret-bioTsm:SecretString:password}}\",\"EngineMode\":\"serverless\",\"VpcSecurityGroupIds\":[\"sg-0df76241e6f760e2a\"],\"EnableHttpEndpoint\":\"false\",\"MasterUsername\":\"{{resolve:secretsmanager:arn:aws:secretsmanager:ca-central-1:543179585367:secret:evcare/features/rds/secret-bioTsm:SecretString:username}}\",\"ScalingConfiguration\":{\"SecondsUntilAutoPause\":\"300\",\"AutoPause\":\"true\",\"MinCapacity\":\"2\",\"MaxCapacity\":\"8\"},\"DBSubnetGroupName\":\"evcare-data-features-dbsubnetgroup-vgnpwxrrxf7o\",\"BackupRetentionPeriod\":\"7\",\"Engine\":\"aurora-mysql\",\"Tags\":[{\"Value\":\"features\",\"Key\":\"Environment\"},{\"Value\":\"evcare-features-aurora-cluster\",\"Key\":\"Name\"},{\"Value\":\"vpc-001db79aea9ecb9ce\",\"Key\":\"VpcId\"}]}"
+    }
+]

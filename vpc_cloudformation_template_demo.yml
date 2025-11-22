@@ -1,0 +1,1454 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: DEMO VPC with RDS, Lambda, API Gateway, DynamoDB, and Cognito
+
+Parameters:
+
+  DemoVpcName:
+    Description: Name of the DEMO VPC
+    Type: String
+    Default: volterra-demo-cloud
+  DemoVpcCidr:
+    Description: CIDR block for the DEMO VPC
+    Type: String
+    Default: 10.1.0.0/16
+  PublicSubnetName:
+    Description: Name of the public subnet
+    Type: String
+    Default: volterra-demo-cloud-public-subnet1
+  PublicSubnetCidr:
+    Description: CIDR block for the public subnet
+    Type: String
+    Default: 10.1.1.0/24
+  SubnetAZ1:
+    Description: Availability Zone for the public subnet
+    Type: AWS::EC2::AvailabilityZone::Name
+    Default: us-east-1a
+  SubnetAZ2:
+    Description: Availability Zone for the public subnet
+    Type: AWS::EC2::AvailabilityZone::Name
+    Default: us-east-1b
+  PrivateSubnetRDSName:
+    Description: Name of the private subnet for RDS
+    Type: String
+    Default: volterra-demo-cloud-private-subnet3-az1
+  PrivateSubnetCidrRDS:
+    Description: CIDR block for the private subnet
+    Type: String
+    Default: 10.1.2.0/24
+  PrivateSubnetLambdaName:
+    Description: Name of the private subnet for Lambda
+    Type: String
+    Default: volterra-demo-cloud-private-subnet1-az1
+  PrivateSubnetCidrLambda:
+    Description: CIDR block for the private subnet
+    Type: String
+    Default: 10.1.3.0/24
+  PrivateSubnetEC2Name:
+    Description: Name of the private subnet for EC2
+    Type: String
+    Default: volterra-demo-cloud-private-subnet2-az2
+  PrivateSubnetCidrEC2:
+    Description: CIDR block for the private subnet for EC2
+    Type: String
+    Default: 10.1.4.0/24
+  MasterUserPassword:
+    Type: String
+    Description: Master user password for the RDS instance.
+    NoEcho: true
+    Default: Ob8jgDppl34d
+
+Resources:
+
+  DemoVpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref DemoVpcCidr
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Ref DemoVpcName
+
+
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref DemoVpc
+      CidrBlock: !Ref PublicSubnetCidr
+      AvailabilityZone: !Ref SubnetAZ1
+      Tags:
+        - Key: Name
+          Value: !Ref PublicSubnetName
+          
+  NatGatewayEIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub ${DemoVpcName}-eip
+
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatGatewayEIP.AllocationId
+      SubnetId: !Ref PublicSubnet
+      Tags:
+        - Key: Name
+          Value: !Sub ${DemoVpcName}-natgw
+          
+  # Internet Gateway
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub ${DemoVpcName}-igw
+
+  # Attach Internet Gateway to VPC
+  AttachInternetGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref DemoVpc
+      InternetGatewayId: !Ref InternetGateway
+
+  # Route Table for Public Subnet
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref DemoVpc
+      Tags:
+        - Key: Name
+          Value: !Sub ${DemoVpcName}-public-routes
+
+  # Route for Public Subnet to Internet Gateway
+  PublicRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  # Associate Public Subnet with Public Route Table
+  PublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref PublicRouteTable
+
+  # Public Subnet NACL
+  PublicSubnetNACL:
+    Type: AWS::EC2::NetworkAcl
+    Properties:
+      VpcId: !Ref DemoVpc
+      Tags:
+        - Key: Name
+          Value: !Sub ${DemoVpcName}-public-nacls
+
+
+  PublicSubnetNACLOutboundRule1:
+    Type: AWS::EC2::NetworkAclEntry
+    Properties:
+      NetworkAclId: !Ref PublicSubnetNACL
+      RuleNumber: 100
+      Protocol: 6  # 6 corresponds to TCP
+      PortRange:
+        From: 80
+        To: 443
+      RuleAction: allow
+      Egress: true
+      CidrBlock: 0.0.0.0/0
+
+  PublicSubnetNACLOutboundRule2:
+    Type: AWS::EC2::NetworkAclEntry
+    Properties:
+      NetworkAclId: !Ref PublicSubnetNACL
+      RuleNumber: 110
+      Protocol: -1  # All traffic
+      RuleAction: allow
+      Egress: true
+      CidrBlock: !Ref PrivateSubnetCidrLambda  # Allow traffic to private subnets
+
+
+  # Associate Public Subnet with NACL
+  PublicSubnetNACLAssociation:
+    Type: AWS::EC2::SubnetNetworkAclAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      NetworkAclId: !Ref PublicSubnetNACL
+
+  PrivateSubnetRDS:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref DemoVpc
+      CidrBlock: !Ref PrivateSubnetCidrRDS
+      AvailabilityZone: !Ref SubnetAZ1
+      Tags:
+        - Key: Name
+          Value: !Ref PrivateSubnetRDSName
+ 
+  PrivateSubnetLambda:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref DemoVpc
+      CidrBlock: !Ref PrivateSubnetCidrLambda
+      AvailabilityZone: !Ref SubnetAZ1
+      Tags:
+        - Key: Name
+          Value: !Ref PrivateSubnetLambdaName
+
+  PrivateSubnetEC2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref DemoVpc
+      CidrBlock: !Ref PrivateSubnetCidrEC2
+      AvailabilityZone: !Ref SubnetAZ2
+      Tags:
+        - Key: Name
+          Value: !Ref PrivateSubnetEC2Name
+
+  ############# NACLS RDS		  
+  RDSSecurityNACL:
+    Type: AWS::EC2::NetworkAcl
+    Properties:
+      VpcId: !Ref DemoVpc
+      Tags:
+        - Key: Name
+          Value: volterra-demo-cloud-private-subnet3-az1-nacls
+
+  AssociateRDSNACL:
+    Type: AWS::EC2::SubnetNetworkAclAssociation
+    Properties:
+      NetworkAclId: !Ref RDSSecurityNACL
+      SubnetId: !Ref PrivateSubnetRDS
+
+  RDSNACLInboundRuleLambda:
+    Type: AWS::EC2::NetworkAclEntry
+    Properties:
+      NetworkAclId: !Ref RDSSecurityNACL
+      RuleNumber: 100
+      Protocol: 6  # TCP
+      RuleAction: allow
+      Egress: false
+      CidrBlock: !Ref PrivateSubnetCidrLambda
+      PortRange:
+        From: 3306
+        To: 3306
+
+  RDSNACLInboundRuleEC2:
+    Type: AWS::EC2::NetworkAclEntry
+    Properties:
+      NetworkAclId: !Ref RDSSecurityNACL
+      RuleNumber: 110
+      Protocol: 6  # TCP
+      RuleAction: allow
+      Egress: false
+      CidrBlock: !Ref PrivateSubnetCidrEC2
+      PortRange:
+        From: 3306
+        To: 3306
+
+  RDSNACLInboundDenyAll:
+    Type: AWS::EC2::NetworkAclEntry
+    Properties:
+      NetworkAclId: !Ref RDSSecurityNACL
+      RuleNumber: 200
+      Protocol: -1  # ALL
+      RuleAction: deny
+      Egress: false
+      CidrBlock: 0.0.0.0/0
+
+  RDSNACLOutboundRuleLambda:
+    Type: AWS::EC2::NetworkAclEntry
+    Properties:
+      NetworkAclId: !Ref RDSSecurityNACL
+      RuleNumber: 100
+      Protocol: 6  # TCP
+      RuleAction: allow
+      Egress: true
+      CidrBlock: !Ref PrivateSubnetCidrLambda
+      PortRange:
+        From: 0
+        To: 65535
+
+  RDSNACLOutboundRuleEC2:
+    Type: AWS::EC2::NetworkAclEntry
+    Properties:
+      NetworkAclId: !Ref RDSSecurityNACL
+      RuleNumber: 110
+      Protocol: 6  # TCP
+      RuleAction: allow
+      Egress: true
+      CidrBlock: !Ref PrivateSubnetCidrEC2
+      PortRange:
+        From: 3306
+        To: 3306
+
+  RDSNACLOutboundDenyAll:
+    Type: AWS::EC2::NetworkAclEntry
+    Properties:
+      NetworkAclId: !Ref RDSSecurityNACL
+      RuleNumber: 200
+      Protocol: -1  # ALL
+      RuleAction: deny
+      Egress: true
+      CidrBlock: 0.0.0.0/0
+
+  LambdaNACL:
+    Type: AWS::EC2::NetworkAcl
+    Properties:
+      VpcId: !Ref DemoVpc
+      Tags:
+        - Key: Name
+          Value: volterra-demo-cloud-private-subnet1-az1-nacls
+
+  AssociateLambdaNACL:
+    Type: AWS::EC2::SubnetNetworkAclAssociation
+    Properties:
+      NetworkAclId: !Ref LambdaNACL
+      SubnetId: !Ref PrivateSubnetLambda
+
+
+  ########## LAMBDA NACLS		  
+  LambdaNACLInboundRDS:
+    Type: AWS::EC2::NetworkAclEntry
+    Properties:
+      NetworkAclId: !Ref LambdaNACL
+      RuleNumber: 100
+      Protocol: 6  # TCP
+      RuleAction: allow
+      Egress: false
+      CidrBlock: !Ref PrivateSubnetCidrRDS
+      PortRange:
+        From: 3306
+        To: 3306
+
+  LambdaNACLInboundDenyAll:
+    Type: AWS::EC2::NetworkAclEntry
+    Properties:
+      NetworkAclId: !Ref LambdaNACL
+      RuleNumber: 200
+      Protocol: -1  # ALL
+      RuleAction: deny
+      Egress: false
+      CidrBlock: 0.0.0.0/0
+
+  # Outbound Rules
+  LambdaNACLOutboundRDS:
+    Type: AWS::EC2::NetworkAclEntry
+    Properties:
+      NetworkAclId: !Ref LambdaNACL
+      RuleNumber: 100
+      Protocol: 6  # TCP
+      RuleAction: allow
+      Egress: true
+      CidrBlock: !Ref PrivateSubnetCidrRDS
+      PortRange:
+        From: 3306
+        To: 3306
+
+  LambdaNACLOutboundNATGateway:
+    Type: AWS::EC2::NetworkAclEntry
+    Properties:
+      NetworkAclId: !Ref LambdaNACL
+      RuleNumber: 110
+      Protocol: 6  # TCP
+      RuleAction: allow
+      Egress: true
+      CidrBlock: !Ref PublicSubnetCidr
+      PortRange:
+        From: 443
+        To: 443
+        
+  LambdaNACLOutboundDenyAll:
+    Type: AWS::EC2::NetworkAclEntry
+    Properties:
+      NetworkAclId: !Ref LambdaNACL
+      RuleNumber: 200
+      Protocol: -1  # ALL
+      RuleAction: deny
+      Egress: true
+      CidrBlock: 0.0.0.0/0
+
+  EC2SecurityNACL:
+    Type: AWS::EC2::NetworkAcl
+    Properties:
+      VpcId: !Ref DemoVpc
+      Tags:
+        - Key: Name
+          Value: volterra-demo-cloud-private-subnet2-az1-nacls
+
+  AssociateEC2NACL:
+    Type: AWS::EC2::SubnetNetworkAclAssociation
+    Properties:
+      NetworkAclId: !Ref EC2SecurityNACL
+      SubnetId: !Ref PrivateSubnetEC2
+
+
+  EC2NACLInboundRDS:
+    Type: AWS::EC2::NetworkAclEntry
+    Properties:
+      NetworkAclId: !Ref EC2SecurityNACL
+      RuleNumber: 110
+      Protocol: 6  # TCP
+      RuleAction: allow
+      Egress: false
+      CidrBlock: !Ref PrivateSubnetCidrRDS
+      PortRange:
+        From: 3306
+        To: 3306
+
+  EC2NACLInboundDenyAll:
+    Type: AWS::EC2::NetworkAclEntry
+    Properties:
+      NetworkAclId: !Ref EC2SecurityNACL
+      RuleNumber: 200
+      Protocol: -1  # ALL
+      RuleAction: deny
+      Egress: false
+      CidrBlock: 0.0.0.0/0
+
+  # Outbound Rules
+  EC2NACLOutboundRDS:
+    Type: AWS::EC2::NetworkAclEntry
+    Properties:
+      NetworkAclId: !Ref EC2SecurityNACL
+      RuleNumber: 100
+      Protocol: 6  # TCP
+      RuleAction: allow
+      Egress: true
+      CidrBlock: !Ref PrivateSubnetCidrRDS
+      PortRange:
+        From: 3306
+        To: 3306
+
+  EC2NACLOutboundDenyAll:
+    Type: AWS::EC2::NetworkAclEntry
+    Properties:
+      NetworkAclId: !Ref EC2SecurityNACL
+      RuleNumber: 200
+      Protocol: -1  # ALL
+      RuleAction: deny
+      Egress: true
+      CidrBlock: 0.0.0.0/0
+
+  
+  # Route Table for RDS Subnet
+  RDSRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref DemoVpc
+      Tags:
+        - Key: Name
+          Value: RDSRouteTableDemo
+
+  # Associate RDS Subnet with RDS Route Table
+  AssociateRDSSubnet:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref RDSRouteTable
+      SubnetId: !Ref PrivateSubnetRDS
+    DependsOn: 
+      - RDSRouteTable
+      - PrivateSubnetRDS
+
+  # Route Table for Lambda Subnet
+  LambdaRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref DemoVpc
+      Tags:
+        - Key: Name
+          Value: LambdaRouteTableDemo
+
+  # NAT Gateway Route for Lambda Subnet
+  LambdaRouteToNATGateway:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref LambdaRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway
+
+  # Associate Lambda Subnet with Lambda Route Table
+  AssociateLambdaSubnet:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref LambdaRouteTable
+      SubnetId: !Ref PrivateSubnetLambda
+
+  # Route Table for EC2 Subnet
+  EC2RouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref DemoVpc
+      Tags:
+        - Key: Name
+          Value: EC2RouteTableDemo
+
+
+  # Associate EC2 Subnet with EC2 Route Table
+  AssociateEC2Subnet:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref EC2RouteTable
+      SubnetId: !Ref PrivateSubnetEC2
+
+
+  # RDS Subnet Group
+  RDSSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupName: volterra-demo-cloud-rds-subnet-group
+      DBSubnetGroupDescription: Subnet group for RDS instance
+      SubnetIds:
+        - !Ref PrivateSubnetRDS
+        - !Ref PrivateSubnetEC2
+      Tags:
+        - Key: Name
+          Value: volterra-demo-cloud-rds-subnet-group
+# RDS Security Group
+  RDSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: demo-rds-sg
+      GroupDescription: Security group for RDS instance
+      VpcId: !Ref DemoVpc
+      Tags:
+        - Key: Name
+          Value: demo-rds-sg
+
+
+  # RDS Instance
+  RDSInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceIdentifier: evcare-webapp-db-demo
+      AllocatedStorage: 20
+      DBInstanceClass: db.t3.micro
+      Engine: mysql
+      EngineVersion: 8.0
+      MasterUsername: admin
+      MasterUserPassword: !Ref MasterUserPassword
+      DBSubnetGroupName: !Ref RDSSubnetGroup
+      VPCSecurityGroups:
+        - !GetAtt RDSSecurityGroup.GroupId
+      MultiAZ: true
+      PubliclyAccessible: false
+      StorageType: gp2
+      Tags:
+        - Key: Name
+          Value: evcare-webapp-db-demo
+
+
+  LambdaSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: lambda-sg
+      GroupDescription: Security group for Lambdas in PrivateSubnetLambda
+      VpcId: !Ref DemoVpc
+      Tags:
+        - Key: Name
+          Value: lambda-sg-demo
+          
+  RDSIngressFromLambda:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref RDSSecurityGroup
+      IpProtocol: tcp
+      FromPort: 3306
+      ToPort: 3306
+      SourceSecurityGroupId: !Ref LambdaSecurityGroup  # Allow traffic from Lambda SG
+
+  
+  LambdaEgressToRDS:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !Ref LambdaSecurityGroup
+      IpProtocol: tcp
+      FromPort: 3306
+      ToPort: 3306
+      DestinationSecurityGroupId: !Ref RDSSecurityGroup  # Allow traffic to RDS SG
+
+  
+  LambdaEgressToInternet:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !Ref LambdaSecurityGroup
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      CidrIp: 0.0.0.0/0 
+      
+  ChangeUserAPIRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: ChangeUserAPIRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: ChangeUserAPIPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - xray:PutTraceSegments
+                  - xray:PutTelemetryRecords
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - lambda:InvokeFunction
+                Resource: "*"
+
+  GetBatteryAPIRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: GetBatteryAPIRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: GetBatteryAPIPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - xray:PutTraceSegments
+                  - xray:PutTelemetryRecords
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - ec2:DescribeNetworkInterfaces
+                  - ec2:CreateNetworkInterface
+                  - ec2:DeleteNetworkInterface
+                Resource: "*"
+
+  GetFleetAPIRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: GetFleetAPIRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: GetFleetAPIPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - xray:PutTraceSegments
+                  - xray:PutTelemetryRecords
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - ec2:DescribeNetworkInterfaces
+                  - ec2:CreateNetworkInterface
+                  - ec2:DeleteNetworkInterface
+                Resource: "*"
+  
+  GetGraphDataAPIRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: GetGraphDataAPIRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: GetGraphDataAPIPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - xray:PutTraceSegments
+                  - xray:PutTelemetryRecords
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - timestream:DescribeEndpoints
+                  - timestream:Select
+                Resource: "*"
+  
+  GetInsightsAPIRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: GetInsightsAPIRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: GetInsightsAPIPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - xray:PutTraceSegments
+                  - xray:PutTelemetryRecords
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "*"
+  
+  GetPowerUnitAPIRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: GetPowerUnitAPIRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: GetPowerUnitAPIPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - xray:PutTraceSegments
+                  - xray:PutTelemetryRecords
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - timestream:DescribeEndpoints
+                  - timestream:Select
+                Resource: "*"
+  
+  UserPoolAPIRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: UserPoolAPIRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: UserPoolAPIPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - xray:PutTraceSegments
+                  - xray:PutTelemetryRecords
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - ec2:DescribeNetworkInterfaces
+                  - ec2:CreateNetworkInterface
+                  - ec2:DeleteNetworkInterface
+                  - dynamodb:*
+                Resource: "*"
+  
+  
+  ChangePasswordAPIRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: ChangePasswordAPIRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: ChangePasswordAPIPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - xray:PutTraceSegments
+                  - xray:PutTelemetryRecords
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "*"
+  
+  
+  ForgotPasswordAPIRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: ForgotPasswordAPIRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: ForgotPasswordAPIPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - xray:PutTraceSegments
+                  - xray:PutTelemetryRecords
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "*"
+  
+  
+  LoginAPIRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: LoginAPIRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: LoginAPIPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - xray:PutTraceSegments
+                  - xray:PutTelemetryRecords
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "*"
+  
+  
+  ProfileChangeAPIRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: ProfileChangeAPIRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: ProfileChangeAPIPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - xray:PutTraceSegments
+                  - xray:PutTelemetryRecords
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "*"
+  
+  RefreshServiceAPIRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: RefreshServiceAPIRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: RefreshServiceAPIPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - xray:PutTraceSegments
+                  - xray:PutTelemetryRecords
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "*"
+
+  SecondPasswdAPIRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: SecondPasswdAPIRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: SecondPasswdAPIPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - xray:PutTraceSegments
+                  - xray:PutTelemetryRecords
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "*"
+
+  FirstPasswdAPIRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: FirstPasswdAPIRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: FirstPasswdAPIPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - xray:PutTraceSegments
+                  - xray:PutTelemetryRecords
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "*"
+
+  GetUserNameAPIRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: GetUserNameAPIRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: GetUserNameAPIPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - xray:PutTraceSegments
+                  - xray:PutTelemetryRecords
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - ec2:CreateNetworkInterface
+                  - ec2:DescribeNetworkInterfaces
+                  - ec2:DescribeSubnets
+                  - ec2:DeleteNetworkInterface
+                  - ec2:AssignPrivateIpAddresses
+                  - ec2:UnassignPrivateIpAddresses
+                Resource: "*"
+
+  CustomResourceHandlerAPIRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: CustomResourceHandlerAPIRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: CustomResourceHandlerAPIPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource:
+                  - "arn:aws:s3:::cdk-hnb659fds-assets-543179585367-us-east-1/*"
+                  - "arn:aws:s3:::sstbootstrap-useast124d14e4b-uxubcrbj67xm/*"
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                  - s3:PutObject
+                  - s3:DeleteObject
+                Resource:
+                  - "arn:aws:s3:::features-sst-backend-api-webs3bucketfe380e8e-hskcrrzx7urc"
+                  - "arn:aws:s3:::features-sst-backend-api-webs3bucketfe380e8e-hskcrrzx7urc/*"
+              - Effect: Allow
+                Action:
+                  - cloudfront:GetInvalidation
+                  - cloudfront:CreateInvalidation
+                Resource: "arn:aws:cloudfront::543179585367:distribution/E139JMSR6D9AWS"
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "*"
+
+  S3AutoDeleteAPIRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: S3AutoDeleteAPIRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: S3AutoDeleteAPIPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "*"
+
+  SortingLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: SortingLambdaExecutionRole
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: SortingLambdaPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:ListBucket
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:Query
+                  - dynamodb:Scan
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - sqs:SendMessage
+                Resource: arn:aws:sqs:us-east-1:543179585367:evcare-data-pipeline.fifo
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - ec2:CreateVpc
+                  - ec2:DescribeVpcs
+                  - ec2:CreateSubnet
+                  - ec2:DescribeSubnets
+                  - ec2:CreateSecurityGroup
+                  - ec2:AuthorizeSecurityGroupIngress
+                  - ec2:AuthorizeSecurityGroupEgress
+                  - ec2:CreateNetworkInterface
+                  - ec2:DescribeNetworkInterfaces
+                  - ec2:DescribeNatGateways
+                  - ec2:DescribeRouteTables
+                  - ec2:DescribeInternetGateways
+                Resource: "*"
+
+  ProcessingLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: ProcessingLambdaExecutionRole
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: ProcessingLambdaPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                  - sqs:GetQueueAttributes
+                Resource: arn:aws:sqs:us-east-1:543179585367:evcare-data-pipeline.fifo
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:BatchWriteItem
+                  - dynamodb:GetItem
+                  - dynamodb:Query
+                  - dynamodb:Scan
+                  - dynamodb:DescribeTable
+                Resource: "*"
+                
+  MetricsLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: MetricsLambdaRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: MetricsLambdaPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - xray:PutTraceSegments
+                  - xray:PutTelemetryRecords
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - ec2:DescribeInstances
+                  - ec2:DescribeNetworkInterfaces
+                  - ec2:CreateNetworkInterface
+                  - ec2:DeleteNetworkInterface
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - kinesis:PutRecord
+                  - kinesis:PutRecords
+                  - kinesis:DescribeStream
+                Resource: !Sub "arn:aws:kinesis:${AWS::Region}:${AWS::AccountId}:stream/EVCare-kinesis-datastream_demo"
+              - Effect: Allow
+                Action:
+                  - rds:DescribeDBInstances
+                  - rds:DescribeDBClusters
+                  - rds:DescribeDBLogFiles
+                Resource: !Sub "arn:aws:rds:${AWS::Region}:${AWS::AccountId}:db:evcare-webapp-db-demo"
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:ListBucket
+                Resource:
+                  - "arn:aws:s3:::evcare-datastore"
+                  - "arn:aws:s3:::evcare-datastore/*"
+              - Effect: Allow
+                Action:
+                  - timestream:DescribeEndpoints
+                  - timestream:Select
+                  - timestream:WriteRecords
+                Resource: !Sub "arn:aws:timestream:${AWS::Region}:${AWS::AccountId}:database/EVCareDatabaseDemo/table/EVCare-metrics-demo"
+  
+  IngestionLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: IngestionLambdaRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: IngestionLambdaPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - xray:PutTraceSegments
+                  - xray:PutTelemetryRecords
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:evcare-device-validation"
+              - Effect: Allow
+                Action:
+                  - kinesis:PutRecord
+                  - kinesis:PutRecords
+                  - kinesis:DescribeStream
+                Resource: !Sub "arn:aws:kinesis:${AWS::Region}:${AWS::AccountId}:stream/EVCare-kinesis-datastream_demo"
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:ListBucket
+                Resource:
+                  - "arn:aws:s3:::evcare-datastore"
+                  - "arn:aws:s3:::evcare-datastore/*"
+  
+  ValidationLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: ValidationLambdaRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: ValidationLambdaPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - xray:PutTraceSegments
+                  - xray:PutTelemetryRecords
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - ec2:DescribeInstances
+                  - ec2:DescribeNetworkInterfaces
+                  - ec2:CreateNetworkInterface
+                  - ec2:DeleteNetworkInterface
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - kinesis:PutRecord
+                  - kinesis:PutRecords
+                  - kinesis:DescribeStream
+                Resource: !Sub "arn:aws:kinesis:${AWS::Region}:${AWS::AccountId}:stream/EVCare-kinesis-datastream_demo"
+              - Effect: Allow
+                Action:
+                  - rds:DescribeDBInstances
+                  - rds:DescribeDBClusters
+                  - rds:DescribeDBLogFiles
+                Resource: !Sub "arn:aws:rds:${AWS::Region}:${AWS::AccountId}:db:evcare-webapp-db-demo"
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:ListBucket
+                Resource:
+                  - "arn:aws:s3:::evcare-datastore"
+                  - "arn:aws:s3:::evcare-datastore/*"
+
+  # Timestream Database
+  EVCareMetricsDatabase:
+    Type: AWS::Timestream::Database
+    Properties:
+      DatabaseName: "EVCareDatabaseDemo"
+      Tags:
+        - Key: Name
+          Value: "EVCareDatabaseDemo"
+
+  # Timestream Table
+  EVCareMetricsTable:
+    Type: AWS::Timestream::Table
+    Properties:
+      DatabaseName: !Ref EVCareMetricsDatabase
+      TableName: "EVCare-metrics-demo"
+      RetentionProperties:
+        MemoryStoreRetentionPeriodInHours: "24"  # Data stored in memory for 1 day
+        MagneticStoreRetentionPeriodInDays: "365"  # Data stored on disk for 1 year
+      Tags:
+        - Key: Name
+          Value: "EVCare-metrics-demo"
+
+  EVCareMessageTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: "EVCareMessage_Demo"
+      AttributeDefinitions:
+        - AttributeName: "MessageID"
+          AttributeType: "S"  # String type primary key
+      KeySchema:
+        - AttributeName: "MessageID"
+          KeyType: "HASH"  # Partition Key
+      BillingMode: PAY_PER_REQUEST  # On-demand pricing
+      Tags:
+        - Key: Name
+          Value: "EVCareMessage_Demo"
+
+  ## DynamoDB Table: EVCareWebAppCache_Demo ##
+  EVCareWebAppCacheTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: "EVCareWebAppCache_Demo"
+      AttributeDefinitions:
+        - AttributeName: "CacheKey"
+          AttributeType: "S"  # String type primary key
+      KeySchema:
+        - AttributeName: "CacheKey"
+          KeyType: "HASH"  # Partition Key
+      BillingMode: PAY_PER_REQUEST  # On-demand pricing
+      Tags:
+        - Key: Name
+          Value: "EVCareWebAppCache_Demo"
+          
+  # DynamoDBSecurityGroup:
+    # Type: AWS::EC2::SecurityGroup
+    # Properties:
+      # GroupName: dynamo-db-sg-demo
+      # GroupDescription: "Security group for DynamoDB access, allowing only Lambdas in privatesubnetlambda"
+      # VpcId: !Ref DemoVpc
+      # SecurityGroupIngress:
+        # - IpProtocol: tcp
+          # FromPort: 443
+          # ToPort: 443
+          # CidrIp: !GetAtt PrivateSubnetLambda.CidrBlock
+        
+  DynamoDBEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.dynamodb"
+      VpcId: !Ref DemoVpc
+      RouteTableIds:
+        - !Ref LambdaRouteTable
+      Tags:
+        - Key: Name
+          Value: EVCare-dynamodb-demo
+
+  # KinesisDataStream:
+    # Type: AWS::Kinesis::Stream
+    # Properties:
+      # Name: "EVCare-kinesis-datastream_demo"
+      # ShardCount: 1
+      # StreamModeDetails:
+        # StreamMode: "ON_DEMAND"
+      # Tags:
+        # - Key: Name
+          # Value: evcare-kinesis-datastream-demo
+
+  KinesisSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Security Group for Kinesis VPC Endpoint"
+      VpcId: !Ref DemoVpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          SourceSecurityGroupId: !Ref LambdaSecurityGroup  # Allow only Lambda
+      Tags:
+        - Key: Name
+          Value: evcare-kinesis-sg-demo
+
+  KinesisVPCEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.kinesis-streams"
+      VpcId: !Ref DemoVpc
+      VpcEndpointType: Interface  # Explicitly define Interface type
+      SubnetIds:
+        - !Ref PrivateSubnetLambda
+      SecurityGroupIds:
+        - !Ref KinesisSecurityGroup  # Reference a security group
+      PrivateDnsEnabled: true
+      Tags:
+        - Key: Name
+          Value: evcare-kinesis-demo-endpoint
+      
+  CognitoUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: EVCare-users-demo
+      AutoVerifiedAttributes:
+        - email
+      UsernameAttributes:
+        - email
+      Schema:
+        - Name: email
+          AttributeDataType: String
+          Mutable: false
+          Required: true
+
+  CognitoUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: evcaredemo
+      UserPoolId: !Ref CognitoUserPool
+      GenerateSecret: false
+      ExplicitAuthFlows:
+        - ALLOW_USER_SRP_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+        - ALLOW_USER_PASSWORD_AUTH
+
+  CognitoUser1:
+    Type: AWS::Cognito::UserPoolUser
+    Properties:
+      UserPoolId: !Ref CognitoUserPool
+      Username: testuser1@example.com
+      UserAttributes:
+        - Name: email
+          Value: testuser1@example.com
