@@ -1,0 +1,135 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Data Layer stack for EVCare: Provisioned Aurora MySQL RDS, DynamoDB tables,
+  and Secrets Manager secret for DB credentials
+
+Parameters:
+  Environment:
+    Type: String
+    Description: Deployment environment (features, dev, prod)
+  VpcId:
+    Type: String
+    Description: VPC ID from Network stack
+  PrivateSubnet1Id:
+    Type: String
+    Description: First private subnet ID for RDS subnet group
+  PrivateSubnet2Id:
+    Type: String
+    Description: Second private subnet ID for RDS subnet group
+  LambdaToRdsSecurityGroupId:
+    Type: String
+    Description: Security Group ID allowing Lambda to connect to RDS
+
+Resources:
+  DbSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub evcare/${Environment}/rds/secret
+      Description: 'RDS Credential Secret for EVCare'
+      GenerateSecretString:
+        SecretStringTemplate: '{"username": "evcareadmin"}'
+        GenerateStringKey: "password"
+        PasswordLength: 16
+        ExcludeCharacters: '"@/\\'
+
+  DbSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: !Sub 'Subnet group for RDS cluster in ${Environment}'
+      SubnetIds:
+        - !Ref PrivateSubnet1Id
+        - !Ref PrivateSubnet2Id
+      Tags:
+        - Key: Name
+          Value: !Sub evcare-${Environment}-rds-subnet-group
+        - Key: VpcId
+          Value: !Ref VpcId
+
+  AuroraCluster:
+    Type: AWS::RDS::DBCluster
+    Properties:
+      Engine: aurora-mysql
+      DBSubnetGroupName: !Ref DbSubnetGroup
+      MasterUsername: !Join ['', ['{{resolve:secretsmanager:', !Ref DbSecret, ':SecretString:username}}']]
+      MasterUserPassword: !Join ['', ['{{resolve:secretsmanager:', !Ref DbSecret, ':SecretString:password}}']]
+      VpcSecurityGroupIds:
+        - !Ref LambdaToRdsSecurityGroupId
+      BackupRetentionPeriod: 7
+      EnableHttpEndpoint: false
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Name
+          Value: !Sub evcare-${Environment}-aurora-cluster
+        - Key: VpcId
+          Value: !Ref VpcId
+
+  AuroraInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBClusterIdentifier: !Ref AuroraCluster
+      DBInstanceClass: db.r5.large   # Choose instance class appropriate to your needs
+      Engine: aurora-mysql
+      PubliclyAccessible: false
+      Tags:
+        - Key: Name
+          Value: !Sub evcare-${Environment}-aurora-instance
+        - Key: VpcId
+          Value: !Ref VpcId
+
+  OrgCacheTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      AttributeDefinitions:
+        - AttributeName: OrgId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: OrgId
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: VpcId
+          Value: !Ref VpcId
+
+  I18nKeyTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      AttributeDefinitions:
+        - AttributeName: KeyId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: KeyId
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: VpcId
+          Value: !Ref VpcId
+
+Outputs:
+  DbClusterArn:
+    Description: Aurora Cluster ARN
+    Value: !GetAtt AuroraCluster.DBClusterArn
+    Export:
+      Name: !Sub evcare-${Environment}-DbClusterArn
+
+  DbSecretArn:
+    Description: Secrets Manager secret ARN for DB credentials
+    Value: !Ref DbSecret
+    Export:
+      Name: !Sub evcare-${Environment}-DbSecretArn
+
+  OrgCacheTableName:
+    Description: DynamoDB Org Cache Table Name
+    Value: !Ref OrgCacheTable
+    Export:
+      Name: !Sub evcare-${Environment}-OrgCacheTableName
+
+  I18nKeyTableName:
+    Description: DynamoDB i18n Key Table Name
+    Value: !Ref I18nKeyTable
+    Export:
+      Name: !Sub evcare-${Environment}-I18nKeyTableName

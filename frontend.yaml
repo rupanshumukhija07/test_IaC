@@ -1,0 +1,96 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  EVCare Frontend Hosting Stack:
+  Private S3 bucket hosting frontend, served securely via CloudFront with Origin Access Identity (OAI).
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    Description: Deployment environment (dev, test, prod)
+
+  DomainName:
+    Type: String
+    Default: ""
+    Description: Optional custom domain name for CloudFront (leave blank if none)
+
+  ACMCertificateArn:
+    Type: String
+    Default: ""
+    Description: ACM cert ARN for HTTPS with custom domain (required if DomainName provided)
+
+Conditions:
+  HasCustomDomain: !Not [!Equals [!Ref DomainName, ""]]
+
+Resources:
+
+  # Private S3 bucket for frontend hosting (no public access)
+  FrontendBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "evcare-frontend-${AWS::AccountId}-${Environment}"
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: error.html
+      PublicAccessBlockConfiguration:     # Block all public access explicitly
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  # OAI to allow CloudFront to access the private bucket
+  CloudFrontOAI:
+    Type: AWS::CloudFront::CloudFrontOriginAccessIdentity
+    Properties:
+      CloudFrontOriginAccessIdentityConfig:
+        Comment: !Sub "OAI for evcare-frontend-${Environment}"
+
+  # Bucket policy to grant CloudFront OAI read permissions
+  BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref FrontendBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Sub "arn:aws:iam::cloudfront:user/CloudFront Origin Access Identity ${CloudFrontOAI}"
+            Action: s3:GetObject
+            Resource: !Sub "${FrontendBucket.Arn}/*"
+
+  # CloudFront distribution serving the S3 content securely
+  FrontendDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        DefaultRootObject: index.html
+        Origins:
+          - Id: S3Origin
+            DomainName: !GetAtt FrontendBucket.DomainName
+            S3OriginConfig:
+              OriginAccessIdentity: !Sub "origin-access-identity/cloudfront/${CloudFrontOAI}"
+        DefaultCacheBehavior:
+          TargetOriginId: S3Origin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD, OPTIONS]
+          CachedMethods: [GET, HEAD]
+          ForwardedValues:
+            QueryString: false
+            Cookies:
+              Forward: none
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
+        Aliases:
+          - !If [HasCustomDomain, !Ref DomainName, !Ref "AWS::NoValue"]
+
+Outputs:
+
+  FrontendBucketName:
+    Description: S3 Bucket name for frontend hosting
+    Value: !Ref FrontendBucket
+
+  CloudFrontDomainName:
+    Description: CloudFront URL to access frontend site
+    Value: !GetAtt FrontendDistribution.DomainName

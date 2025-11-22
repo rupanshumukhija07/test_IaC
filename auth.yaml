@@ -1,0 +1,94 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  EVCare Authentication Stack:
+  Provisions a Cognito User Pool and App Client for user authentication.
+  ExplicitAuthFlows updated to only use ALLOW_* flows.
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    Description: Deployment environment (dev, test, prod)
+  AppClientName:
+    Type: String
+    Default: web-client
+    Description: Name of the Cognito App Client
+
+Resources:
+
+  # Cognito User Pool
+  EVCareUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub "evcare-${Environment}-user-pool"
+      AutoVerifiedAttributes:
+        - email
+      AliasAttributes:
+        - email
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireUppercase: true
+          RequireNumbers: true
+          RequireSymbols: false
+          RequireLowercase: true
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - Name: verified_email
+            Priority: 1
+      Schema:
+        - Name: email
+          AttributeDataType: String
+          Required: true
+          Mutable: false
+        - Name: name
+          AttributeDataType: String
+          Required: false
+          Mutable: true
+
+  # Cognito App Client (modern ALLOW_* auth flows only)
+  EVCareUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      UserPoolId: !Ref EVCareUserPool
+      ClientName: !Ref AppClientName
+      GenerateSecret: false
+      ExplicitAuthFlows:
+        - ALLOW_USER_PASSWORD_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+        - ALLOW_CUSTOM_AUTH
+        - ALLOW_USER_SRP_AUTH
+      PreventUserExistenceErrors: ENABLED
+      SupportedIdentityProviders:
+        - COGNITO
+
+  # OPTIONAL: Cognito domain for hosted login UI (uncomment if needed)
+  # EVCareUserPoolDomain:
+  #   Type: AWS::Cognito::UserPoolDomain
+  #   Properties:
+  #     UserPoolId: !Ref EVCareUserPool
+  #     Domain: !Sub "evcare-${Environment}-auth"
+
+Outputs:
+
+  UserPoolId:
+    Description: Cognito User Pool ID
+    Value: !Ref EVCareUserPool
+
+  UserPoolArn:
+    Description: Cognito User Pool ARN (use for API Gateway)
+    Value: !GetAtt EVCareUserPool.Arn
+
+  AppClientId:
+    Description: Cognito App Client ID
+    Value: !Ref EVCareUserPoolClient
+
+  # Uncomment if using hosted domain:
+  # UserPoolDomainURL:
+  #   Description: Cognito User Pool Domain (hosted UI)
+  #   Value: !Sub "https://${EVCareUserPoolDomain}.auth.${AWS::Region}.amazoncognito.com"
+
+# ==== Extensibility Notes ====
+# Add more App Clients for mobile/native integrations as needed.
+# For federated auth, add identity providers and domain section.
+# Use outputs for integration in API Gateway (api.yaml).

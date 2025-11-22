@@ -1,0 +1,166 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  VPC, Subnets, Internet Gateway, Route Tables, and Security Groups
+  for EVCare multi-environment setup (features, dev, prod).
+
+Parameters:
+  Environment:
+    Type: String
+    Description: Deployment environment name (features, dev, prod).
+  VpcCIDR:
+    Type: String
+    Description: CIDR block for the VPC, e.g., 10.2.0.0/16 for features.
+
+Resources:
+  # Create the main Virtual Private Cloud with DNS support enabled for internal resolution
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCIDR
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub evcare-${Environment}-vpc
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Internet Gateway enables internet access for public subnets inside this VPC
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub evcare-${Environment}-igw
+
+  # Attach the Internet Gateway to the VPC for outbound traffic
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  # Public Subnet - hosts internet facing resources such as NAT gateways, bastions, etc.
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Select [0, !Cidr [!Ref VpcCIDR, 6, 8]] # Select the first /24 from the VPC CIDR
+      MapPublicIpOnLaunch: true  # Auto-assign public IP to instances launched here
+      AvailabilityZone: !Select [0, !GetAZs '']  # Select the first AZ in the region
+      Tags:
+        - Key: Name
+          Value: !Sub evcare-${Environment}-public-subnet
+
+  # Private Subnet 1 - hosts backend resources like Lambdas needing private access
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Select [2, !Cidr [!Ref VpcCIDR, 6, 8]] # Select a /24 (third block) for private subnet
+      AvailabilityZone: !Select [0, !GetAZs '']  # Match AZ with PublicSubnet for HA
+      Tags:
+        - Key: Name
+          Value: !Sub evcare-${Environment}-private-subnet-1
+
+  # Private Subnet 2 - second AZ for high availability and fault tolerance
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Select [3, !Cidr [!Ref VpcCIDR, 6, 8]] # Select a /24 (fourth block) for second private subnet
+      AvailabilityZone: !Select [1, !GetAZs '']  # Select second AZ in region
+      Tags:
+        - Key: Name
+          Value: !Sub evcare-${Environment}-private-subnet-2
+
+  # Route Table for Public Subnet - routes all internet traffic via Internet Gateway
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub evcare-${Environment}-public-rt
+
+  # Route in Public Route Table sending all 0.0.0.0/0 traffic to Internet Gateway
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachGateway
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  # Associate PublicSubnet with PublicRouteTable for routing to internet
+  PublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref PublicRouteTable
+
+  # Security Group allowing Lambda functions to access RDS on MySQL port (3306)
+  LambdaToRdsSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow Lambda to connect to RDS on port 3306
+      VpcId: !Ref VPC
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          CidrIp: 0.0.0.0/0  # Consider restricting this further for higher security
+      Tags:
+        - Key: Name
+          Value: !Sub evcare-${Environment}-lambda-rds-sg
+
+  # Security Group for Lambda access to DynamoDB (usually via VPC Endpoints)
+  LambdaToDynamoDbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow Lambda to access DynamoDB endpoints
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub evcare-${Environment}-lambda-dynamodb-sg
+
+Outputs:
+  # Export VPC ID for use in other stacks
+  VpcId:
+    Description: VPC ID
+    Value: !Ref VPC
+    Export:
+      Name: !Sub evcare-${Environment}-VpcId
+
+  # Export Public Subnet ID for referencing in compute or frontend stacks
+  PublicSubnetId:
+    Description: Public subnet ID
+    Value: !Ref PublicSubnet
+    Export:
+      Name: !Sub evcare-${Environment}-PublicSubnetId
+
+  # Export Private Subnet IDs for Lambda and other backend resources
+  PrivateSubnet1Id:
+    Description: First private subnet ID
+    Value: !Ref PrivateSubnet1
+    Export:
+      Name: !Sub evcare-${Environment}-PrivateSubnet1Id
+
+  PrivateSubnet2Id:
+    Description: Second private subnet ID
+    Value: !Ref PrivateSubnet2
+    Export:
+      Name: !Sub evcare-${Environment}-PrivateSubnet2Id
+
+  # Export security group IDs for Lambda networking rules
+  LambdaToRdsSecurityGroupId:
+    Description: Security Group ID for Lambda to RDS access
+    Value: !Ref LambdaToRdsSecurityGroup
+    Export:
+      Name: !Sub evcare-${Environment}-LambdaToRdsSG
+
+  LambdaToDynamoDbSecurityGroupId:
+    Description: Security Group ID for Lambda to DynamoDB access
+    Value: !Ref LambdaToDynamoDbSecurityGroup
+    Export:
+      Name: !Sub evcare-${Environment}-LambdaToDynamoDbSG

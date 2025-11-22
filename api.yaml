@@ -1,0 +1,87 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  EVCare API Gateway Stack: REST endpoint at /test secured by Cognito User Pool authorizer.
+
+Parameters:
+  LambdaFunctionArn:
+    Type: String
+    Description: ARN of the Lambda function to invoke
+
+  ApiStageName:
+    Type: String
+    Default: dev
+    Description: API Gateway deployment stage
+
+  UserPoolArn:
+    Type: String
+    Description: ARN of the Cognito User Pool for authentication
+
+Resources:
+
+  EVCareApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: evcare-api
+      Description: API for EVCare secured by Cognito
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+
+  TestResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref EVCareApi
+      ParentId: !GetAtt EVCareApi.RootResourceId
+      PathPart: test
+
+  CognitoAuthorizer:
+    Type: AWS::ApiGateway::Authorizer
+    Properties:
+      Name: cognito-user-pool-authorizer
+      RestApiId: !Ref EVCareApi
+      IdentitySource: method.request.header.Authorization
+      ProviderARNs:
+        - !Ref UserPoolArn   # Must be a list, not a string!
+      Type: COGNITO_USER_POOLS
+
+  TestMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref EVCareApi
+      ResourceId: !Ref TestResource
+      HttpMethod: POST
+      AuthorizationType: COGNITO_USER_POOLS
+      AuthorizerId: !Ref CognitoAuthorizer
+      Integration:
+        IntegrationHttpMethod: POST
+        Type: AWS_PROXY
+        Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaFunctionArn}/invocations
+
+  ApiDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn: [TestMethod]
+    Properties:
+      RestApiId: !Ref EVCareApi
+      StageName: !Ref ApiStageName
+
+  LambdaInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref LambdaFunctionArn
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${EVCareApi}/*/*
+
+Outputs:
+
+  ApiInvokeURL:
+    Description: Endpoint you can POST to, requiring Cognito JWT token
+    Value: !Sub https://${EVCareApi}.execute-api.${AWS::Region}.amazonaws.com/${ApiStageName}/test
+
+  ApiId:
+    Description: API Gateway ID
+    Value: !Ref EVCareApi
+
+  AuthorizerId:
+    Description: Cognito Authorizer ID
+    Value: !Ref CognitoAuthorizer

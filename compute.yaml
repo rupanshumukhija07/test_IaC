@@ -1,0 +1,152 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Compute Stack for EVCare: One inline Lambda function for simple testing,
+  placeholders for real Lambda code from S3 with support for multiple runtimes.
+
+Parameters:
+  Environment:
+    Type: String
+    Description: Deployment environment (features, dev, prod)
+
+  DbClusterArn:
+    Type: String
+    Description: Aurora DB Cluster ARN
+
+  DbSecretArn:
+    Type: String
+    Description: Secrets Manager ARN for DB credentials
+
+  OrgCacheTableName:
+    Type: String
+    Description: DynamoDB Org Cache Table name
+
+  I18nKeyTableName:
+    Type: String
+    Description: DynamoDB i18n Key Table name
+
+  
+  ExistingLambdaRoleArn:
+    Type: String
+    Description: ARN of an existing Lambda execution role
+
+Resources:
+
+  # IAM Role for Lambda functions with necessary permissions for RDS, Secrets Manager, DynamoDB, and logging
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub evcare-${Environment}-lambda-execution-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: evcare-lambda-db-access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # Permissions for RDS Data API and Secrets Manager
+              - Effect: Allow
+                Action:
+                  - rds-data:ExecuteStatement
+                  - rds-data:BatchExecuteStatement
+                  - secretsmanager:GetSecretValue
+                Resource:
+                  - !Ref DbClusterArn
+                  - !Ref DbSecretArn
+              # Permissions for DynamoDB table access
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:Query
+                  - dynamodb:Scan
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                Resource:
+                  - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${OrgCacheTableName}
+                  - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${I18nKeyTableName}
+
+  # Inline Lambda function (Python) for simple testing without S3 code
+  AppFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub evcare-${Environment}-app-function
+      Handler: index.handler
+      Runtime: python3.9
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Code:
+        ZipFile: |
+          def handler(event, context):
+              return {
+                  'statusCode': 200,
+                  'body': 'Hello from inline Python Lambda!'
+              }
+      Timeout: 15
+      MemorySize: 512
+
+      # Uncomment and update below for real Lambda deployment from S3
+      # Code:
+      #   S3Bucket: your-lambda-code-bucket
+      #   S3Key: app-function.zip
+
+  # Example of Node.js Lambda function placeholder - S3 code only (commented out)
+  # WorkerFunctionNodeJS:
+  #   Type: AWS::Lambda::Function
+  #   Properties:
+  #     FunctionName: !Sub evcare-${Environment}-worker-function-nodejs
+  #     Handler: index.handler
+  #     Runtime: nodejs18.x
+  #     Role: !GetAtt LambdaExecutionRole.Arn
+  #     # Use this block when ready with real code in S3
+  #     Code:
+  #       S3Bucket: your-lambda-code-bucket
+  #       S3Key: worker-function-nodejs.zip
+  #     Timeout: 300
+  #     MemorySize: 1024
+
+  # Example Go Lambda function placeholder - S3 code only (commented out)
+  # GoFunction:
+  #   Type: AWS::Lambda::Function
+  #   Properties:
+  #     FunctionName: !Sub evcare-${Environment}-go-function
+  #     Handler: main
+  #     Runtime: go1.x
+  #     Role: !GetAtt LambdaExecutionRole.Arn
+  #     # Use this block when you have your Go Lambda packaged and uploaded
+  #     Code:
+  #       S3Bucket: your-lambda-code-bucket
+  #       S3Key: go-function.zip
+  #     Timeout: 15
+  #     MemorySize: 512
+
+Outputs:
+
+  AppFunctionArn:
+    Description: ARN of the inline Python Lambda function
+    Value: !GetAtt AppFunction.Arn
+    Export:
+      Name: !Sub evcare-${Environment}-AppFunctionArn
+
+  # Uncomment outputs for other functions after deployment
+  # WorkerFunctionNodeJSArn:
+  #   Description: ARN of the Node.js worker Lambda function
+  #   Value: !GetAtt WorkerFunctionNodeJS.Arn
+  #   Export:
+  #     Name: !Sub evcare-${Environment}-WorkerFunctionNodeJSArn
+
+  # GoFunctionArn:
+  #   Description: ARN of the Go Lambda function
+  #   Value: !GetAtt GoFunction.Arn
+  #   Export:
+  #     Name: !Sub evcare-${Environment}-GoFunctionArn
+
+  LambdaExecutionRoleArn:
+    Description: ARN of the Lambda execution role
+    Value: !GetAtt LambdaExecutionRole.Arn
+    Export:
+      Name: !Sub evcare-${Environment}-LambdaExecutionRoleArn
